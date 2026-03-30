@@ -39,7 +39,7 @@ jobs:
         env:
           SIM_MODE: success
         run: |
-          python scripts/run_job.py
+          python scripts/job_sim.py
 
       - name: Show generated result
         run: |
