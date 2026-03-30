@@ -1,0 +1,125 @@
+# This workflow simulates a failing operational job in an upstream service.
+# It is manually triggered for testing purposes.
+# The job failure is a business/runtime failure, not a CI quality-gate failure.
+
+name: Simulator Failure
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: "Operational job name to simulate"
+        required: true
+        default: "daily-data-sync"
+      failure_mode:
+        description: "Choose fixed for dedupe demos, or random for variety"
+        required: true
+        default: "fixed"
+        type: choice
+        options:
+          - fixed
+          - random
+      error_code:
+        description: "Used when failure_mode=fixed"
+        required: true
+        default: "OBJECT_NOT_FOUND"
+        type: choice
+        options:
+          - OBJECT_NOT_FOUND
+          - OUTPUT_WRITE_FAILED
+          - INVALID_INPUT
+          - DOWNSTREAM_UNAVAILABLE
+          - PROCESSING_TIMEOUT
+
+permissions:
+  contents: read
+
+jobs:
+  run-failing-job:
+    name: Run failing simulated job
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Show selected inputs
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Job: ${{ inputs.job_name }}"
+          echo "Failure mode: ${{ inputs.failure_mode }}"
+          echo "Requested error code: ${{ inputs.error_code }}"
+
+      - name: Run simulated operational job
+        id: run_job
+        continue-on-error: true
+        env:
+          SIM_ERROR_CODE: ${{ inputs.error_code }}
+        run: |
+          if [ "${{ inputs.failure_mode }}" = "random" ]; then
+            export SIM_MODE=random
+          else
+            export SIM_MODE=failure
+          fi
+
+          python scripts/run_job.py 2> job_error.log
+          exit_code=$?
+
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+
+          echo "---- job stderr ----"
+          cat job_error.log
+
+          error_code=$(grep '^ERROR_CODE=' job_error.log | cut -d= -f2- || true)
+          summary=$(grep '^SUMMARY=' job_error.log | cut -d= -f2- || true)
+          details=$(grep '^DETAILS=' job_error.log | cut -d= -f2- || true)
+          severity=$(grep '^SEVERITY=' job_error.log | cut -d= -f2- || true)
+
+          echo "error_code=${error_code}" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
+          echo "details=${details}" >> "$GITHUB_OUTPUT"
+          echo "severity=${severity}" >> "$GITHUB_OUTPUT"
+
+          # Keep this step green so we can notify the central service first.
+          exit 0
+
+      - name: Notify failure endpoint
+        if: steps.run_job.outputs.exit_code != '0'
+        env:
+          WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
+          WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
+        run: |
+          echo "Operational job failed, notifying the central failure service."
+
+          cat > payload.json <<EOF
+          {
+            "source": "github-actions",
+            "repository": "${{ github.repository }}",
+            "workflowName": "${{ github.workflow }}",
+            "jobName": "${{ inputs.job_name }}",
+            "summary": "${{ steps.run_job.outputs.summary }}",
+            "details": "${{ steps.run_job.outputs.details }}",
+            "severity": "${{ steps.run_job.outputs.severity }}",
+            "errorCode": "${{ steps.run_job.outputs.error_code }}"
+          }
+          EOF
+
+          echo "Payload prepared:"
+          cat payload.json
+
+          curl --fail --show-error --silent \
+            -X POST "${WORKFLOW_FAILURE_ENDPOINT}" \
+            -H "Content-Type: application/json" \
+            -H "X-Workflow-Secret: ${WORKFLOW_FAILURE_SECRET}" \
+            --data @payload.json
+
+      - name: Mark workflow as failed for demo realism
+        if: steps.run_job.outputs.exit_code != '0'
+        run: |
+          echo "The operational job failed, so this workflow is being marked as failed."
+          exit 1
