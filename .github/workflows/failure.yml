@@ -1,0 +1,114 @@
+# This workflow simulates a failing operational job in an upstream service.
+# It is manually triggered from the Actions tab.
+# A failure payload is sent to the central service, then the workflow is marked failed.
+
+name: Simulator Failure
+
+'on':
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: "Operational job name to simulate"
+        required: true
+        default: "daily-data-sync"
+      failure_mode:
+        description: "Choose fixed for dedupe demos, or random for variety"
+        required: true
+        default: "fixed"
+        type: choice
+        options:
+          - fixed
+          - random
+      error_code:
+        description: "Used when failure_mode=fixed"
+        required: true
+        default: "OBJECT_NOT_FOUND"
+        type: choice
+        options:
+          - OBJECT_NOT_FOUND
+          - OUTPUT_WRITE_FAILED
+          - INVALID_INPUT
+          - DOWNSTREAM_UNAVAILABLE
+          - PROCESSING_TIMEOUT
+
+permissions:
+  contents: read
+
+jobs:
+  run-failing-job:
+    name: Run failing simulated job
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show selected inputs
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Job: ${{ inputs.job_name }}"
+          echo "Failure mode: ${{ inputs.failure_mode }}"
+          echo "Requested error code: ${{ inputs.error_code }}"
+
+      - name: Run simulated operational job
+        id: run_job
+        continue-on-error: true
+        env:
+          SIM_ERROR_CODE: ${{ inputs.error_code }}
+        run: |
+          if [ "${{ inputs.failure_mode }}" = "random" ]; then
+            export SIM_MODE=random
+          else
+            export SIM_MODE=failure
+          fi
+
+          python scripts/run_job.py
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Show generated result
+        run: |
+          cat job_result.json
+
+      - name: Notify central service
+        env:
+          WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
+          WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("job_result.json").read_text(encoding="utf-8"))
+          payload = {
+              "source": "github-actions",
+              "repository": "${{ github.repository }}",
+              "workflowName": "${{ github.workflow }}",
+              "jobName": "${{ inputs.job_name }}",
+              "status": result["status"],
+              "summary": result["summary"],
+              "details": result["details"],
+              "severity": result["severity"],
+              "errorCode": result["errorCode"],
+          }
+          Path("payload.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          cat payload.json
+
+          curl --fail --show-error --silent \
+            -X POST "${WORKFLOW_FAILURE_ENDPOINT}" \
+            -H "Content-Type: application/json" \
+            -H "X-Workflow-Secret: ${WORKFLOW_FAILURE_SECRET}" \
+            --data @payload.json
+
+      - name: Mark workflow as failed for demo realism
+        if: steps.run_job.outputs.exit_code != '0'
+        run: |
+          echo "The operational job failed, so this workflow is being marked as failed."
+          exit 1
