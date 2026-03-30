@@ -57,7 +57,7 @@ jobs:
           echo "Requested error code: ${{ inputs.error_code }}"
 
       - name: Run simulated operational job
-        id: run_job
+        id: job_sim
         continue-on-error: true
         env:
           SIM_ERROR_CODE: ${{ inputs.error_code }}
@@ -68,7 +68,7 @@ jobs:
             export SIM_MODE=failure
           fi
 
-          python scripts/run_job.py
+          python scripts/job_sim.py
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Show generated result
@@ -108,7 +108,7 @@ jobs:
             --data @payload.json
 
       - name: Mark workflow as failed for demo realism
-        if: steps.run_job.outputs.exit_code != '0'
+        if: steps.job_sim.outputs.exit_code != '0'
         run: |
           echo "The operational job failed, so this workflow is being marked as failed."
           exit 1
