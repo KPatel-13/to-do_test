@@ -1,10 +1,10 @@
 # This workflow simulates a successful operational job in an upstream service.
-# It is manually triggered for demo purposes.
-# No notification should be sent when the job succeeds.
+# It is manually triggered from the Actions tab.
+# A success payload is still sent to the central service, which can discard it.
 
 name: Simulator Success
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       job_name:
@@ -22,16 +22,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Show selected inputs
         run: |
           echo "Repository: ${{ github.repository }}"
+          echo "Workflow: ${{ github.workflow }}"
           echo "Job: ${{ inputs.job_name }}"
 
       - name: Run simulated job successfully
@@ -40,11 +41,38 @@ jobs:
         run: |
           python scripts/run_job.py
 
-      - name: Notify failure endpoint
-        if: failure()
+      - name: Show generated result
+        run: |
+          cat job_result.json
+
+      - name: Notify central service
         env:
           WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
           WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
         run: |
-          echo "This step should never run because the simulated job succeeded."
-          exit 1
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("job_result.json").read_text(encoding="utf-8"))
+          payload = {
+              "source": "github-actions",
+              "repository": "${{ github.repository }}",
+              "workflowName": "${{ github.workflow }}",
+              "jobName": "${{ inputs.job_name }}",
+              "status": result["status"],
+              "summary": result["summary"],
+              "details": result["details"],
+              "severity": result["severity"],
+              "errorCode": result["errorCode"],
+          }
+          Path("payload.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          cat payload.json
+
+          curl --fail --show-error --silent \
+            -X POST "${WORKFLOW_FAILURE_ENDPOINT}" \
+            -H "Content-Type: application/json" \
+            -H "X-Workflow-Secret: ${WORKFLOW_FAILURE_SECRET}" \
+            --data @payload.json
