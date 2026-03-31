@@ -1,10 +1,9 @@
 # This workflow simulates a failing operational job in an upstream service.
 # It is manually triggered from the Actions tab.
-# A failure payload is sent to the central service, then the workflow is marked failed.
 
 name: Simulator Failure
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       job_name:
@@ -72,13 +71,12 @@ jobs:
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Show generated result
+        if: always()
         run: |
           cat job_result.json
 
-      - name: Notify central service
-        env:
-          WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
-          WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
+      - name: Build request payload
+        if: steps.job_sim.outputs.exit_code != '0'
         run: |
           python - <<'PY'
           import json
@@ -86,21 +84,30 @@ jobs:
 
           result = json.loads(Path("job_result.json").read_text(encoding="utf-8"))
           payload = {
-              "source": "github-actions",
-              "repository": "${{ github.repository }}",
+              "repo": "${{ github.repository }}",
               "workflowName": "${{ github.workflow }}",
-              "jobName": "${{ inputs.job_name }}",
-              "status": result["status"],
-              "summary": result["summary"],
-              "details": result["details"],
-              "severity": result["severity"],
-              "errorCode": result["errorCode"],
+              "runId": "${{ github.run_id }}",
+              "runUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "failures": [
+                  {
+                      "jobName": "${{ inputs.job_name }}",
+                      "summary": result["summary"],
+                      "details": result["details"],
+                      "severity": result["severity"],
+                  }
+              ],
           }
           Path("payload.json").write_text(json.dumps(payload), encoding="utf-8")
           PY
 
           cat payload.json
 
+      - name: Notify central service
+        if: steps.job_sim.outputs.exit_code != '0'
+        env:
+          WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
+          WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
+        run: |
           curl --fail --show-error --silent \
             -X POST "${WORKFLOW_FAILURE_ENDPOINT}" \
             -H "Content-Type: application/json" \
