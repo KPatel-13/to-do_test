@@ -8,50 +8,46 @@ ERROR_CATALOG = {
     "OBJECT_NOT_FOUND": {
         "summary": "Required object does not exist",
         "details": "The workflow could not find the required object in storage.",
-        "severity": "medium",
+        "severity": "HIGH",
     },
     "OUTPUT_WRITE_FAILED": {
         "summary": "Output write failed",
         "details": "The workflow failed while writing the output artifact.",
-        "severity": "high",
+        "severity": "HIGH",
     },
     "INVALID_INPUT": {
         "summary": "Input validation failed",
         "details": "The workflow received invalid or incomplete input data.",
-        "severity": "medium",
+        "severity": "MEDIUM",
     },
     "DOWNSTREAM_UNAVAILABLE": {
         "summary": "Downstream service unavailable",
         "details": "A required downstream dependency did not respond successfully.",
-        "severity": "high",
+        "severity": "HIGH",
     },
     "PROCESSING_TIMEOUT": {
         "summary": "Processing timed out",
         "details": "The workflow exceeded the allowed processing time.",
-        "severity": "high",
+        "severity": "HIGH",
     },
 }
 
 
 def write_result(payload: dict) -> None:
-    with open("job_result.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f)
+    with open("job_result.json", "w", encoding="utf-8") as file_handle:
+        json.dump(payload, file_handle)
 
 
 def main() -> int:
     mode = os.getenv("SIM_MODE", "success").strip().lower()
-    requested_error_code = os.getenv("SIM_ERROR_CODE", "OBJECT_NOT_FOUND").strip().upper()
+    requested_error_code = (
+        os.getenv("SIM_ERROR_CODE", "OBJECT_NOT_FOUND").strip().upper()
+    )
 
     print("Starting simulated operational job...")
 
     if mode == "success":
-        payload = {
-            "status": "success",
-            "summary": "Job completed successfully",
-            "details": "The simulated operational job completed and produced its expected output.",
-            "severity": "low",
-            "errorCode": "",
-        }
+        payload = {"result": "success"}
         write_result(payload)
         print("Job completed successfully.")
         return 0
@@ -70,11 +66,10 @@ def main() -> int:
         return 2
 
     payload = {
-        "status": "failure",
+        "result": "failure",
         "summary": error["summary"],
         "details": error["details"],
         "severity": error["severity"],
-        "errorCode": error_code,
     }
     write_result(payload)
 
