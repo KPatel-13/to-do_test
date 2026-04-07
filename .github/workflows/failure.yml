@@ -62,7 +62,7 @@ jobs:
           echo "Requested error code: ${{ inputs.error_code }}"
 
       - name: Run simulated operational job
-        id: run_job
+        id: job_sim
         env:
           SIM_ERROR_CODE: ${{ inputs.error_code }}
         run: |
@@ -88,7 +88,7 @@ jobs:
           cat job_result.json
 
       - name: Build request payload
-        if: steps.run_job.outputs.exit_code != '0'
+        if: steps.job_sim.outputs.exit_code != '0'
         run: |
           python - <<'PY'
           import json
@@ -116,7 +116,7 @@ jobs:
           cat payload.json
 
       - name: Notify central service
-        if: steps.run_job.outputs.exit_code != '0'
+        if: steps.job_sim.outputs.exit_code != '0'
         env:
           WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
           WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
@@ -145,7 +145,7 @@ jobs:
           fi
 
       - name: Mark workflow as failed for demo realism
-        if: steps.run_job.outputs.exit_code != '0'
+        if: steps.job_sim.outputs.exit_code != '0'
         run: |
           echo "The operational job failed, so this workflow is being marked as failed."
           exit 1
