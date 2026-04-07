@@ -1,5 +1,11 @@
 # This workflow simulates a failing operational job in an upstream service.
 # It is manually triggered from the Actions tab.
+# The payload matches the current /workflow-failure API contract.
+#
+# Important debugging choice:
+# - We do NOT print the endpoint secret value.
+# - We DO print the response status/body from the central service.
+# - This lets us prove whether the POST succeeded without exposing the URL.
 
 name: Simulator Failure
 
@@ -57,7 +63,6 @@ jobs:
 
       - name: Run simulated operational job
         id: job_sim
-        continue-on-error: true
         env:
           SIM_ERROR_CODE: ${{ inputs.error_code }}
         run: |
@@ -67,8 +72,15 @@ jobs:
             export SIM_MODE=failure
           fi
 
+          # Temporarily disable "exit on error" so we can capture the script exit code
+          # and allow later steps to build/send the payload.
+          set +e
           python scripts/job_sim.py
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit_code=$?
+          set -e
+
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          echo "Captured simulator exit code: ${exit_code}"
 
       - name: Show generated result
         if: always()
@@ -100,6 +112,7 @@ jobs:
           Path("payload.json").write_text(json.dumps(payload), encoding="utf-8")
           PY
 
+          echo "Payload being sent:"
           cat payload.json
 
       - name: Notify central service
@@ -108,11 +121,28 @@ jobs:
           WORKFLOW_FAILURE_ENDPOINT: ${{ secrets.WORKFLOW_FAILURE_ENDPOINT }}
           WORKFLOW_FAILURE_SECRET: ${{ secrets.WORKFLOW_FAILURE_SECRET }}
         run: |
-          curl --fail --show-error --silent \
+          # Do not echo the endpoint or secret.
+          # We only capture the HTTP status code and response body.
+          response_file="response.json"
+
+          status_code=$(curl \
+            --show-error \
+            --silent \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
             -X POST "${WORKFLOW_FAILURE_ENDPOINT}" \
             -H "Content-Type: application/json" \
             -H "X-Workflow-Secret: ${WORKFLOW_FAILURE_SECRET}" \
-            --data @payload.json
+            --data @payload.json)
+
+          echo "HTTP status: ${status_code}"
+          echo "Response body:"
+          cat "$response_file"
+
+          if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
+            echo "Request failed."
+            exit 1
+          fi
 
       - name: Mark workflow as failed for demo realism
         if: steps.job_sim.outputs.exit_code != '0'
